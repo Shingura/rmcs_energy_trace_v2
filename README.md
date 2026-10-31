@@ -39,7 +39,7 @@ scripts/download_assets.sh
 文件清单和校验值在 `scripts/assets.sha256`。下面两种情况要更新文件，同时更新清单中的校验值，并发布新的 Release：
 
 - 改了 mesh 或 M3T 生成参数：用 `m3t_generate` 重新生成 M3T 的文件。
-- 重新训练了检测网络：用 `simulation/training/export_yolo.py` 导出。
+- 重新训练了检测网络（`simulation/training/train_yolo.sh`）：用 `simulation/training/export_yolo.py` 导出。
 
 检测网络由 Ultralytics 导出，导出时写入的元数据声明的许可证是 AGPL-3.0。
 

@@ -4,8 +4,10 @@
 用法：
     python3 simulation/training/export_yolo.py <best.pt> <输出目录>
 
-导出参数固定为 imgsz=640、不含 NMS、不用半精度，与 C++ 解码器（输出 [1, 5, 8400]）一致。
-输出目录下会生成 <名称>_openvino_model/，其中的 .xml 就是 model_path。
+导出参数固定为 imgsz=640、不含 NMS、不用半精度，与 C++ 解码器一致：分割网络输出 [1, 37, 8400] 和
+[1, 32, 160, 160]（检测网络为 [1, 5, 8400]）。
+输出目录下会生成 <名称>_openvino_model/，其中的 .xml 就是 Detector 的 network_path。
+.pt 权重由 train_yolo.sh 训练得到（<训练输出目录>/weights/best.pt）。
 需要事先安装 ultralytics 和 openvino（本脚本不会安装依赖）；权重和导出结果不要提交到仓库。
 """
 

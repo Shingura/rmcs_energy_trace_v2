@@ -9,6 +9,7 @@
 完整轮廓（full 中的像素）的 min-visible，就不标注，这样的单元在图中保留，当作背景。
 数据集目录下生成 images/ 和 labels/（各含 train、val，图像用硬链接）、data.yaml，
 以及 preview/ 下画出标注的预览图。需要 opencv-python、numpy 和 ultralytics。
+训练用 train_yolo.sh。
 """
 
 import argparse
