@@ -1,0 +1,20 @@
+# 构建输出
+build/
+install/
+log/
+.cache/
+compile_commands.json
+
+# Python 环境与运行输出
+.venv/
+__pycache__/
+runs/
+
+# 本地数据与网络权重：不进入仓库
+dataset/
+# 运行所需的网络和模型，由 scripts/download_assets.sh 下载
+assets/
+weights/
+*.pt
+*.onnx
+*.engine
