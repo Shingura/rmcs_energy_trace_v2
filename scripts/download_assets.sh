@@ -4,14 +4,14 @@
 #
 # 用法：scripts/download_assets.sh [--dir <目录>] [--base-url <地址>]
 #   --dir       下载到的目录，默认是包内的 assets/
-#   --base-url  文件所在的地址，默认是 GitHub Release assets-v1
+#   --base-url  文件所在的地址，默认是 GitHub Release assets-v2
 # 有文件下载失败或校验不通过时，退出码为 1。
 
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 target_dir="$(dirname "${script_dir}")/assets"
-base_url="https://github.com/Shingura/rmcs_energy_trace/releases/download/assets-v1"
+base_url="https://github.com/Shingura/rmcs_energy_trace_v2/releases/download/assets-v2"
 
 while (($# > 0)); do
     case "$1" in

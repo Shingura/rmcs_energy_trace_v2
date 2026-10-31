@@ -30,13 +30,18 @@ git clone https://github.com/Shingura/rmcs_energy_trace_v2.git
 
 ## 运行所需文件
 
-M3T 的 OBJ 和区域、深度模型不放进仓库。运行下面的脚本，下载到包内的 `assets/` 并校验 SHA256：
+检测网络（YOLO11n-seg，OpenVINO 格式）和 M3T 的 OBJ、区域模型、深度模型不放进仓库。运行下面的脚本，从 GitHub Release `assets-v2` 下载到包内的 `assets/`，并校验 SHA256：
 
 ```zsh
 scripts/download_assets.sh
 ```
 
-文件清单和校验值在 `scripts/assets.sha256`。改了 mesh 或 M3T 生成参数后，用 `m3t_generate` 重新生成，并更新清单中的校验值。
+文件清单和校验值在 `scripts/assets.sha256`。下面两种情况要更新文件，同时更新清单中的校验值，并发布新的 Release：
+
+- 改了 mesh 或 M3T 生成参数：用 `m3t_generate` 重新生成 M3T 的文件。
+- 重新训练了检测网络：用 `simulation/training/export_yolo.py` 导出。
+
+检测网络由 Ultralytics 导出，导出时写入的元数据声明的许可证是 AGPL-3.0。
 
 ## 构建与测试
 
