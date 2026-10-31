@@ -145,6 +145,37 @@ install(DIRECTORY config meshes DESTINATION share/${PROJECT_NAME})
 # assets/ 由 scripts/download_assets.sh 下载，不在仓库中；还没下载时跳过
 install(DIRECTORY assets DESTINATION share/${PROJECT_NAME} OPTIONAL)
 
+# 仿真：取矿动作规划（需要 MoveIt，缺失时跳过，不影响其余目标）。
+# 规划文件供 simulation/blender/render_sequence.py 渲染 RGB-D 序列
+find_package(moveit_ros_planning_interface QUIET)
+find_package(tf2_eigen QUIET)
+find_package(moveit_msgs QUIET)
+find_package(shape_msgs QUIET)
+find_package(geometry_msgs QUIET)
+find_package(ament_index_cpp QUIET)
+if(moveit_ros_planning_interface_FOUND AND tf2_eigen_FOUND AND moveit_msgs_FOUND
+   AND shape_msgs_FOUND AND geometry_msgs_FOUND AND ament_index_cpp_FOUND)
+  add_executable(pickup_plan simulation/planning/pickup_plan.cpp)
+  target_compile_definitions(pickup_plan PRIVATE
+    RMCS_ENERGY_TRACE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
+  target_link_libraries(pickup_plan PRIVATE ${PROJECT_NAME})
+  ament_target_dependencies(pickup_plan PUBLIC
+    moveit_ros_planning_interface
+    tf2_eigen
+    shape_msgs
+    moveit_msgs
+    geometry_msgs
+    ament_index_cpp
+    rclcpp
+  )
+  install(TARGETS pickup_plan DESTINATION lib/${PROJECT_NAME})
+  install(FILES simulation/planning/pickup_plan.yaml DESTINATION share/${PROJECT_NAME}/config)
+  install(FILES simulation/planning/pickup_plan.launch.py DESTINATION share/${PROJECT_NAME}/launch)
+else()
+  message(STATUS "MoveIt not found, skip pickup_plan")
+endif()
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 

@@ -25,6 +25,8 @@ git clone https://github.com/Shingura/rmcs_energy_trace_v2.git
 | `tool/` | `energy_unit_detect`（离线检测）、`m3t_generate`（生成 M3T 模型） |
 | `test/` | 各模块的离线测试 |
 | `scripts/` | 运行所需文件的下载脚本 |
+| `simulation/` | 仿真：Blender 渲染（`blender/`）、检测网络训练（`training/`）、MoveIt 取矿规划（`planning/`），中心块尺寸在 `scene.json` |
+| `dataset/` | 本地数据，不进仓库：`inputs/` 外部获取的文件，`detector/<版本>/` 检测网络的训练流程，`scenarios/<名称>/` 规划和渲染序列 |
 
 ## 运行所需文件
 

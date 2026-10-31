@@ -1,0 +1,8 @@
+{
+  "hub": {
+    "height": 0.7,
+    "apothem": 0.095,
+    "thickness": 0.102,
+    "unit_offset": 0.15
+  }
+}
