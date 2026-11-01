@@ -116,6 +116,7 @@ target_link_libraries(${PROJECT_NAME}
 
 # GCC 14 对 PCL ICP 内部 SVD 估计中的 Eigen 表达式误报 -Warray-bounds（用到 pcl::IterativeClosestPoint 的文件）
 set_source_files_properties(
+  ${PROJECT_SOURCE_DIR}/src/registration/registration.cpp
   ${PROJECT_SOURCE_DIR}/test/point_to_plane.cpp
   PROPERTIES COMPILE_OPTIONS -Wno-array-bounds
 )
@@ -180,6 +181,13 @@ endif()
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_registration test/registration.cpp)
+  target_link_libraries(test_registration ${PROJECT_NAME})
+  target_compile_definitions(test_registration PRIVATE
+    RMCS_ENERGY_UNIT_MESH="${PROJECT_SOURCE_DIR}/meshes/energy_unit.stl"
+  )
+  set_tests_properties(test_registration PROPERTIES TIMEOUT 900)
 
   ament_add_gtest(test_depth_mask test/depth_mask.cpp)
   target_link_libraries(test_depth_mask ${PROJECT_NAME})
