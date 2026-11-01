@@ -189,6 +189,14 @@ if(BUILD_TESTING)
   )
   set_tests_properties(test_registration PROPERTIES TIMEOUT 900)
 
+  ament_add_gtest(test_tracking test/tracking.cpp)
+  target_link_libraries(test_tracking ${PROJECT_NAME})
+  target_compile_definitions(test_tracking PRIVATE
+    RMCS_ENERGY_UNIT_MESH="${PROJECT_SOURCE_DIR}/meshes/energy_unit.stl"
+    RMCS_ENERGY_TRACE_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
+  )
+  set_tests_properties(test_tracking PROPERTIES TIMEOUT 300)
+
   ament_add_gtest(test_depth_mask test/depth_mask.cpp)
   target_link_libraries(test_depth_mask ${PROJECT_NAME})
   set_tests_properties(test_depth_mask PROPERTIES TIMEOUT 10)
