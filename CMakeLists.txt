@@ -193,6 +193,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_rasterize ${PROJECT_NAME})
   set_tests_properties(test_rasterize PROPERTIES TIMEOUT 10)
 
+  ament_add_gtest(test_depth_check test/depth_check.cpp)
+  target_link_libraries(test_depth_check ${PROJECT_NAME})
+  set_tests_properties(test_depth_check PROPERTIES TIMEOUT 10)
+
   ament_add_gtest(test_point_to_plane test/point_to_plane.cpp)
   target_link_libraries(test_point_to_plane ${PROJECT_NAME})
   set_tests_properties(test_point_to_plane PROPERTIES TIMEOUT 10)
