@@ -42,6 +42,9 @@ public:
     struct Config {
         // 彩色图和深度图共用这组参数（深度图已对齐到彩色图）。同时用于配准、跟踪和检测框裁剪
         geometry::Camera camera;
+        // 线程数上限，同时用于推理和 OpenMP（配准、跟踪、深度检查）。0 表示不限制。
+        // 实机上还有机械臂控制等组件，视觉不该占满所有核
+        int threads = 0;
 
         detection::Detector::Config detector;
         registration::Registration::Config registration;

@@ -6,6 +6,7 @@
 #include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/runtime/compiled_model.hpp>
 #include <openvino/runtime/core.hpp>
+#include <openvino/runtime/properties.hpp>
 
 namespace rmcs_energy_trace_v2::detection {
 
@@ -26,8 +27,9 @@ struct Yolo11 {
 
     static ov::Shape input_shape() { return ov::Shape{1, kInputHeight, kInputWidth, 3}; }
 
-    static ov::CompiledModel
-        compile(ov::Core& core, const std::string& location, const std::string& device) {
+    // threads 为推理线程数，0 表示由 OpenVINO 决定
+    static ov::CompiledModel compile(
+        ov::Core& core, const std::string& location, const std::string& device, int threads) {
         auto model = core.read_model(location);
         auto ppp = ov::preprocess::PrePostProcessor{model};
 
@@ -44,6 +46,10 @@ struct Yolo11 {
         input.model().set_layout("NCHW");
 
         // 固定 f32：CPU 插件默认在支持的 CPU 上用 bf16，结果会随 CPU 是否支持 bf16 而变
+        if (threads > 0)
+            return core.compile_model(
+                ppp.build(), device, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY),
+                ov::hint::inference_precision(ov::element::f32), ov::inference_num_threads(threads));
         return core.compile_model(
             ppp.build(), device, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY),
             ov::hint::inference_precision(ov::element::f32));

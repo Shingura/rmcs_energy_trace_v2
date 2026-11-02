@@ -44,7 +44,8 @@ struct Detector::Impl {
 
         try {
             const auto device = config.infer_device.empty() ? "CPU" : config.infer_device;
-            openvino_model = Yolo11::compile(openvino_core, config.network_path, device);
+            openvino_model =
+                Yolo11::compile(openvino_core, config.network_path, device, config.infer_threads);
             has_mask = check_outputs(openvino_model);
             request = openvino_model.create_infer_request();
 

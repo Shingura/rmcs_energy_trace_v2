@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include <omp.h>
 #include <opencv2/core/types.hpp>
 
 #include "geometry/mesh.hpp"
@@ -60,6 +61,10 @@ struct TargetEstimator::Impl {
         config = new_config;
         auto tracker_config = config.tracker;
         tracker_config.camera = config.camera;
+        if (config.threads > 0) {
+            config.detector.infer_threads = config.threads;
+            omp_set_num_threads(config.threads);
+        }
 
         if (const auto result = detector.initialize(config.detector); !result)
             return std::unexpected{"Failed to initialize the detector: " + result.error()};

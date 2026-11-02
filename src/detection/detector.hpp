@@ -21,6 +21,8 @@ public:
     struct Config {
         std::string network_path;
         std::string infer_device = "CPU";
+        // 推理线程数，0 表示由 OpenVINO 决定
+        int infer_threads = 0;
 
         float score_threshold = 0.25f;
         float nms_threshold = 0.7f;

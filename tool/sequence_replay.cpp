@@ -52,6 +52,7 @@ struct Options {
     fs::path sequence_dir;
     fs::path output_dir;
     std::string network;
+    int threads = 0;        // 0 表示不限制
     double fps = 30.;
     double depth_noise = 1.5;
     int frames = 0;         // 0 表示全部
@@ -410,6 +411,8 @@ auto parse_options(int argc, char* argv[]) -> std::optional<Options> {
         const auto arg = std::string{argv[i]};
         if (arg == "--network" && i + 1 < argc) {
             options.network = argv[++i];
+        } else if (arg == "--threads" && i + 1 < argc) {
+            options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (arg == "--fps" && i + 1 < argc) {
             options.fps = std::strtod(argv[++i], nullptr);
         } else if (arg == "--depth-noise" && i + 1 < argc) {
@@ -436,7 +439,7 @@ auto main(int argc, char* argv[]) -> int {
     if (!options) {
         std::println(
             "Usage: sequence_replay <sequence_dir> <output_dir> --network <network.xml> "
-            "[--fps 30] [--depth-noise 1.5] [--frames N] [--no-video]");
+            "[--threads N] [--fps 30] [--depth-noise 1.5] [--frames N] [--no-video]");
         return EXIT_FAILURE;
     }
     const auto sequence = load_sequence(options->sequence_dir);
@@ -450,6 +453,7 @@ auto main(int argc, char* argv[]) -> int {
     auto config = TargetEstimator::Config{};
     config.camera = sequence->camera;
     config.detector.network_path = options->network;
+    config.threads = options->threads;
     config.tracker.model_dir = RMCS_ENERGY_TRACE_ASSET_DIR;
     auto estimator = TargetEstimator{};
     if (auto initialized = estimator.initialize(RMCS_ENERGY_UNIT_MESH, config); !initialized) {
