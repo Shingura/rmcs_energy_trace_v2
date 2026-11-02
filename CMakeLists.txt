@@ -126,6 +126,15 @@ add_executable(energy_unit_detect tool/energy_unit_detect.cpp)
 target_link_libraries(energy_unit_detect PRIVATE ${PROJECT_NAME})
 install(TARGETS energy_unit_detect DESTINATION lib/${PROJECT_NAME})
 
+# 离线回放：在渲染出的 RGB-D 序列上运行开环目标估计，输出叠加画面的视频、逐帧 CSV 和误差汇总
+add_executable(sequence_replay tool/sequence_replay.cpp)
+target_link_libraries(sequence_replay PRIVATE ${PROJECT_NAME})
+target_compile_definitions(sequence_replay PRIVATE
+  RMCS_ENERGY_UNIT_MESH="${PROJECT_SOURCE_DIR}/meshes/energy_unit.stl"
+  RMCS_ENERGY_TRACE_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
+)
+install(TARGETS sequence_replay DESTINATION lib/${PROJECT_NAME})
+
 if(RMCS_ENERGY_TRACE_V2_BUILD_M3T_TOOLS)
   # 不链接 ${PROJECT_NAME}：它含有 m3t_runtime（OpenGL 占位头文件），与 m3t_full 的真实 OpenGL 冲突。
   # 工具只需要读 mesh 和写 OBJ，直接编译这两个源文件
