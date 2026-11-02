@@ -216,6 +216,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_point_to_plane test/point_to_plane.cpp)
   target_link_libraries(test_point_to_plane ${PROJECT_NAME})
   set_tests_properties(test_point_to_plane PROPERTIES TIMEOUT 10)
+
+  ament_add_gtest(test_estimation test/estimation.cpp)
+  target_link_libraries(test_estimation ${PROJECT_NAME})
+  set_tests_properties(test_estimation PROPERTIES TIMEOUT 10)
 endif()
 
 ament_auto_package()
