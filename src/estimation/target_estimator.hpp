@@ -54,6 +54,7 @@ public:
     };
 
     using Status = Initialization::Status;
+    using Clock = Initialization::Clock;
 
     struct Output {
         Status status = Status::kIdle;
@@ -69,15 +70,16 @@ public:
     std::expected<void, std::string>
         initialize(const std::string& mesh_path, const Config& config) noexcept;
 
-    // 收到启动指令，开始初始化
-    void start() noexcept;
+    // 收到启动指令，开始初始化。now 为该帧的时刻，见 Initialization::update
+    void start(Clock::time_point now = Clock::now()) noexcept;
     // 回到等待状态：丢弃参考位姿和跟踪状态，等下一次指令
     void reset() noexcept;
 
-    // 逐帧处理。camera_to_base 为该帧图像对应的相机到底座的位姿。
+    // 逐帧处理。camera_to_base 为该帧图像对应的相机到底座的位姿，now 为该帧的时刻。
     // 等待和失败状态下不做处理，只回报状态
     Output update(
-        const cv::Mat& bgr, const cv::Mat& depth, const Eigen::Isometry3d& camera_to_base) noexcept;
+        const cv::Mat& bgr, const cv::Mat& depth, const Eigen::Isometry3d& camera_to_base,
+        Clock::time_point now = Clock::now()) noexcept;
 };
 
 } // namespace rmcs_energy_trace_v2::estimation

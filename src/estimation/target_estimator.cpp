@@ -99,8 +99,8 @@ struct TargetEstimator::Impl {
         return closed >= config.trust.min_closed_end_observed_ratio;
     }
 
-    void start() noexcept {
-        initialization.start();
+    void start(Initialization::Clock::time_point now) noexcept {
+        initialization.start(now);
         tracker_started = false;
         pose = Eigen::Isometry3d::Identity();
     }
@@ -111,8 +111,9 @@ struct TargetEstimator::Impl {
         pose = Eigen::Isometry3d::Identity();
     }
 
-    auto update(const cv::Mat& bgr, const cv::Mat& depth, const Eigen::Isometry3d& camera_to_base)
-        -> Output {
+    auto update(
+        const cv::Mat& bgr, const cv::Mat& depth, const Eigen::Isometry3d& camera_to_base,
+        Initialization::Clock::time_point now) -> Output {
         const auto status = initialization.status();
         if (status != Status::kInitializing && status != Status::kReady)
             return Output{.status = status};
@@ -148,7 +149,7 @@ struct TargetEstimator::Impl {
             pose = *registered;
 
         auto output = Output{
-            .status = initialization.update(registered, tracked),
+            .status = initialization.update(registered, tracked, now),
             .pose = pose,
             .pose_valid = pose_valid};
         if (const auto& reference = initialization.reference_pose())
@@ -164,14 +165,14 @@ auto TargetEstimator::initialize(const std::string& mesh_path, const Config& con
     return std::unexpected{std::string{"Failed to initialize the target estimator: "} + e.what()};
 }
 
-void TargetEstimator::start() noexcept { pimpl_->start(); }
+void TargetEstimator::start(Clock::time_point now) noexcept { pimpl_->start(now); }
 
 void TargetEstimator::reset() noexcept { pimpl_->reset(); }
 
 auto TargetEstimator::update(
-    const cv::Mat& bgr, const cv::Mat& depth, const Eigen::Isometry3d& camera_to_base) noexcept
-    -> Output try {
-    return pimpl_->update(bgr, depth, camera_to_base);
+    const cv::Mat& bgr, const cv::Mat& depth, const Eigen::Isometry3d& camera_to_base,
+    Clock::time_point now) noexcept -> Output try {
+    return pimpl_->update(bgr, depth, camera_to_base, now);
 } catch (const std::exception&) {
     return Output{.status = pimpl_->initialization.status()};
 }

@@ -30,17 +30,22 @@ public:
     Initialization() = default;
     explicit Initialization(const Config& config) noexcept;
 
-    // 收到启动指令
-    void start() noexcept;
+    using Clock = std::chrono::steady_clock;
+
+    // 收到启动指令。now 为这一帧的时刻
+    void start(Clock::time_point now = Clock::now()) noexcept;
     // 回到等待状态，等下一次指令。参考位姿同时清空
     void reset() noexcept;
 
     // 逐帧推进一次。registered 为本帧配准通过时给出的位姿，tracked 为本帧跟踪结果，
     // 两者为空表示本帧没有结果。已有参考位姿时忽略 registered。
+    // now 为这一帧的时刻：实机用图像的时间戳，回放按序列帧率换算。离线处理一帧的时间
+    // 通常远长于相机出帧的间隔，所以不能用当前时刻。
     // 返回推进后的状态：成功和失败都是终态，保持到 reset
     Status update(
         const std::optional<Eigen::Isometry3d>& registered,
-        const std::optional<Eigen::Isometry3d>& tracked) noexcept;
+        const std::optional<Eigen::Isometry3d>& tracked,
+        Clock::time_point now = Clock::now()) noexcept;
 
     [[nodiscard]] Status status() const noexcept;
 
@@ -52,7 +57,7 @@ private:
     Status status_ = Status::kIdle;
     std::optional<Eigen::Isometry3d> reference_pose_{};
     int confirmation_count_ = 0;
-    std::chrono::steady_clock::time_point begin_time_{};
+    Clock::time_point begin_time_{};
 };
 
 } // namespace rmcs_energy_trace_v2::estimation

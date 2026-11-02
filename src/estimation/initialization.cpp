@@ -26,11 +26,11 @@ auto deviation(const Eigen::Isometry3d& reference, const Eigen::Isometry3d& trac
 Initialization::Initialization(const Config& config) noexcept
     : config_{config} {}
 
-void Initialization::start() noexcept {
+void Initialization::start(Clock::time_point now) noexcept {
     status_ = Status::kInitializing;
     reference_pose_.reset();
     confirmation_count_ = 0;
-    begin_time_ = std::chrono::steady_clock::now();
+    begin_time_ = now;
 }
 
 void Initialization::reset() noexcept {
@@ -42,12 +42,11 @@ void Initialization::reset() noexcept {
 
 auto Initialization::update(
     const std::optional<Eigen::Isometry3d>& registered,
-    const std::optional<Eigen::Isometry3d>& tracked) noexcept -> Status {
+    const std::optional<Eigen::Isometry3d>& tracked, Clock::time_point now) noexcept -> Status {
     if (status_ != Status::kInitializing)
         return status_;
 
-    if (std::chrono::steady_clock::now() - begin_time_
-        > std::chrono::duration<double>{config_.timeout_s}) {
+    if (now - begin_time_ > std::chrono::duration<double>{config_.timeout_s}) {
         status_ = Status::kFailed;
         return status_;
     }
