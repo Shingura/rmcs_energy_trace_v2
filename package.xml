@@ -12,6 +12,7 @@
   <depend>rclcpp</depend>
   <depend>pluginlib</depend>
   <depend>rmcs_executor</depend>
+  <depend>rmcs_msgs</depend>
   <depend>eigen</depend>
   <depend>libopencv-dev</depend>
   <!-- 粗配准用到 contrib 中的 surface_matching（PPF） -->
