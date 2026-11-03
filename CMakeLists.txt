@@ -157,6 +157,35 @@ install(DIRECTORY config meshes DESTINATION share/${PROJECT_NAME})
 # assets/ 由 scripts/download_assets.sh 下载，不在仓库中；还没下载时跳过
 install(DIRECTORY assets DESTINATION share/${PROJECT_NAME} OPTIONAL)
 
+# 仿真：读取 plan.json，在独立话题和 TF 上回放，不需要 move_group。
+find_package(kdl_parser QUIET)
+find_package(sensor_msgs QUIET)
+find_package(std_srvs QUIET)
+find_package(tf2_ros QUIET)
+find_package(visualization_msgs QUIET)
+find_package(ament_index_cpp QUIET)
+if(kdl_parser_FOUND AND sensor_msgs_FOUND AND std_srvs_FOUND AND tf2_ros_FOUND
+   AND visualization_msgs_FOUND AND ament_index_cpp_FOUND)
+  add_library(pickup_rviz_replay_core STATIC simulation/rviz/rviz_replay.cpp)
+  target_include_directories(pickup_rviz_replay_core PUBLIC ${PROJECT_SOURCE_DIR}/simulation/rviz)
+  target_link_libraries(pickup_rviz_replay_core PUBLIC Eigen3::Eigen opencv_core)
+  ament_target_dependencies(pickup_rviz_replay_core PUBLIC kdl_parser)
+
+  add_executable(pickup_rviz_replay simulation/rviz/pickup_rviz_replay.cpp src/geometry/mesh.cpp)
+  target_include_directories(pickup_rviz_replay PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_include_directories(pickup_rviz_replay SYSTEM PRIVATE ${PCL_INCLUDE_DIRS})
+  target_link_libraries(pickup_rviz_replay PRIVATE pickup_rviz_replay_core ${PCL_LIBRARIES})
+  ament_target_dependencies(pickup_rviz_replay PUBLIC
+    ament_index_cpp rclcpp sensor_msgs std_srvs tf2_ros visualization_msgs
+  )
+  install(TARGETS pickup_rviz_replay DESTINATION lib/${PROJECT_NAME})
+  install(FILES simulation/rviz/pickup_rviz_replay.launch.py DESTINATION share/${PROJECT_NAME}/launch)
+  install(FILES simulation/rviz/pickup_rviz_replay.rviz DESTINATION share/${PROJECT_NAME}/config)
+  install(FILES simulation/scene.json DESTINATION share/${PROJECT_NAME}/simulation)
+else()
+  message(STATUS "RViz replay dependencies not found, skip pickup_rviz_replay")
+endif()
+
 # 仿真：取矿动作规划（需要 MoveIt，缺失时跳过，不影响其余目标）。
 # 规划文件供 simulation/blender/render_sequence.py 渲染 RGB-D 序列
 find_package(moveit_ros_planning_interface QUIET)
@@ -190,6 +219,15 @@ endif()
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
+  if(TARGET pickup_rviz_replay_core)
+    ament_add_gtest(test_pickup_rviz_replay test/pickup_rviz_replay.cpp)
+    target_link_libraries(test_pickup_rviz_replay pickup_rviz_replay_core)
+    target_compile_definitions(test_pickup_rviz_replay PRIVATE
+      RMCS_RVIZ_REPLAY_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(test_pickup_rviz_replay PROPERTIES TIMEOUT 10)
+  endif()
 
   ament_add_gtest(test_registration test/registration.cpp)
   target_link_libraries(test_registration ${PROJECT_NAME})

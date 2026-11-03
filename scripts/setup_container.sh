@@ -31,4 +31,10 @@ sudo apt-get install -y \
     "ros-${ROS_DISTRO}-moveit-resources" \
     "ros-${ROS_DISTRO}-rviz2" \
     "ros-${ROS_DISTRO}-moveit-ros-planning-interface" \
+    "ros-${ROS_DISTRO}-kdl-parser" \
+    "ros-${ROS_DISTRO}-robot-state-publisher" \
+    "ros-${ROS_DISTRO}-sensor-msgs" \
+    "ros-${ROS_DISTRO}-std-srvs" \
+    "ros-${ROS_DISTRO}-tf2-ros" \
+    "ros-${ROS_DISTRO}-visualization-msgs" \
     libgl-dev libglew-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
