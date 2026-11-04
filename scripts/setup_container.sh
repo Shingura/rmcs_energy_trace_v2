@@ -2,6 +2,7 @@
 # 在 RMCS 开发容器中安装机械臂和视觉开发工具的额外依赖。容器重建后需重新运行。
 #   - 机械臂：MoveIt、可视化工具、Servo、示例资源、RViz，以及机械臂配置包的依赖
 #   - 取矿规划 pickup_plan（simulation/planning/）：MoveIt 规划接口
+#   - RealSense D435i：ROS 驱动和 librealsense2 SDK，不安装 DKMS 或内核补丁
 #   - M3T 模型生成工具 m3t_generate：从源码编译 GLFW 需要的 X11 和 OpenGL 开发包
 #
 # 用法：bash scripts/setup_container.sh（在本包目录运行，需要网络和 sudo 权限）
@@ -37,4 +38,6 @@ sudo apt-get install -y \
     "ros-${ROS_DISTRO}-std-srvs" \
     "ros-${ROS_DISTRO}-tf2-ros" \
     "ros-${ROS_DISTRO}-visualization-msgs" \
+    "ros-${ROS_DISTRO}-realsense2-camera" \
+    "ros-${ROS_DISTRO}-librealsense2" \
     libgl-dev libglew-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
