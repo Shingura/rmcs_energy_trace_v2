@@ -1,19 +1,24 @@
+#include <algorithm>
+#include <format>
+#include <memory>
+#include <stdexcept>
 #include <string>
 
+#include <cv_bridge/cv_bridge.hpp>
 #include <eigen3/Eigen/Geometry>
+#include <opencv2/imgproc.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rmcs_executor/component.hpp>
-#include <rmcs_msgs/switch.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+#include <sensor_msgs/msg/image.hpp>
 
-#include "estimation/target_estimator.hpp"
-#include "geometry/camera.hpp"
+#include "camera/camera_receiver.hpp"
+#include "detection/detector.hpp"
 
 namespace rmcs_energy_trace_v2 {
 
-// 能量单元位姿估计组件：开环取矿。遥控器双上开始初始化，双下强制停机。
-// 相机图像、图像时间戳和相机到底座的位姿都还没有接入，所以估计器不逐帧推进，
-// 输出保持上一次的结果。三者就位后 update 里改成按帧调用即可。
+// 当前只接入相机和检测。位姿输出保持等待状态，不初始化位姿估计器或响应遥控器。
 class EnergyTraceComponent final
     : public rmcs_executor::Component
     , public rclcpp::Node {
@@ -26,84 +31,58 @@ public:
         register_output("/energy_trace/is_pose_valid", is_pose_valid_, false);
         register_output("/energy_trace/pose", pose_, Eigen::Isometry3d::Identity());
 
-        // 遥控器不是必须的：没有接遥控器时，指令由上层组件给出
-        register_input("/remote/switch/left", switch_left_, false);
-        register_input("/remote/switch/right", switch_right_, false);
+        auto config = detection::Detector::Config{};
+        config.network_path = get_parameter("network_path").as_string();
+        config.infer_threads = get_parameter_or<int>("threads", 4);
+        if (const auto initialized = detector_.initialize(config); !initialized)
+            throw std::runtime_error{initialized.error()};
 
-        mesh_path_ = get_parameter_or<std::string>("mesh_path", "");
-        // 相机参数没有默认值：缺少时构造失败，避免用错误的内参静默运行
-        camera_ = geometry::Camera{
-            .width = static_cast<int>(get_parameter("camera.width").as_int()),
-            .height = static_cast<int>(get_parameter("camera.height").as_int()),
-            .fx = get_parameter("camera.fx").as_double(),
-            .fy = get_parameter("camera.fy").as_double(),
-            .cx = get_parameter("camera.cx").as_double(),
-            .cy = get_parameter("camera.cy").as_double(),
-            .depth_scale = get_parameter("camera.depth_scale").as_double(),
-        };
-
-        auto config = estimation::TargetEstimator::Config{};
-        config.camera = camera_;
-        // 实机上还有机械臂控制等组件，视觉不占满所有核
-        config.threads = get_parameter_or<int>("threads", 4);
-        config.detector.network_path = get_parameter_or<std::string>("network_path", "");
-        config.tracker.model_dir = get_parameter_or<std::string>("model_dir", "");
-
-        if (const auto initialized = estimator_.initialize(mesh_path_, config)) {
-            estimator_ready_ = true;
-        } else {
-            RCLCPP_ERROR(get_logger(), "%s", initialized.error().c_str());
-        }
-        RCLCPP_INFO(
-            get_logger(), "energy trace component created, mesh_path='%s'", mesh_path_.c_str());
+        detection_image_pub_ =
+            create_publisher<sensor_msgs::msg::Image>("/energy_trace/detection_image", 1);
+        auto receiver_config = camera::CameraReceiver::Config{};
+        receiver_config.color_topic =
+            get_parameter_or<std::string>("color_topic", "/camera/camera/color/image_raw");
+        receiver_config.depth_topic = get_parameter_or<std::string>(
+            "depth_topic", "/camera/camera/aligned_depth_to_color/image_raw");
+        camera_receiver_ = std::make_unique<camera::CameraReceiver>(
+            *this, receiver_config, [this](const camera::Frame& frame) { on_frame(frame); });
     }
 
-    void update() override {
-        handle_remote();
-
-        // 相机尚未接入：没有图像就不推进估计器。接入后改为
-        //     output_ = estimator_.update(color, depth, camera_to_base, stamp);
-        *status_ = static_cast<int>(output_.status);
-        *is_pose_valid_ = output_.pose_valid;
-        *pose_ = output_.pose;
-    }
+    void update() override {}
 
 private:
-    void handle_remote() {
-        if (!switch_left_.ready() || !switch_right_.ready())
+    void on_frame(const camera::Frame& frame) {
+        const auto detections = detector_.detect(frame.bgr);
+        if (detection_image_pub_->get_subscription_count() == 0)
             return;
-        const auto left = *switch_left_;
-        const auto right = *switch_right_;
-        const auto both_up = left == rmcs_msgs::Switch::UP && right == rmcs_msgs::Switch::UP;
-        const auto both_down = left == rmcs_msgs::Switch::DOWN && right == rmcs_msgs::Switch::DOWN;
 
-        // 只在开关拨到位的那一帧动作，避免每帧重复触发
-        if (estimator_ready_) {
-            if (both_up && !both_up_last_)
-                estimator_.start();
-            else if (both_down && !both_down_last_)
-                estimator_.reset();
+        auto display = cv_bridge::CvImage{};
+        display.header.stamp = frame.stamp;
+        display.header.frame_id = frame.frame_id;
+        display.encoding = sensor_msgs::image_encodings::BGR8;
+        display.image = frame.bgr.clone();
+        for (const auto& detection : detections) {
+            if (!detection.mask.empty()) {
+                auto tinted = display.image.clone();
+                tinted.setTo(cv::Scalar{255, 255, 0}, detection.mask);
+                cv::addWeighted(display.image, 0.5, tinted, 0.5, 0., display.image);
+            }
+            cv::rectangle(display.image, detection.box, {0, 255, 0}, 2);
+            cv::putText(
+                display.image, std::format("{:.3f}", detection.score),
+                {static_cast<int>(detection.box.x),
+                 std::max(static_cast<int>(detection.box.y) - 6, 12)},
+                cv::FONT_HERSHEY_SIMPLEX, 0.6, {0, 255, 0}, 2);
         }
-        both_up_last_ = both_up;
-        both_down_last_ = both_down;
+        detection_image_pub_->publish(*display.toImageMsg());
     }
 
-    // 等待 0、初始化中 1、已定下参考位姿 2、初始化失败 3
     OutputInterface<int> status_;
     OutputInterface<bool> is_pose_valid_;
     OutputInterface<Eigen::Isometry3d> pose_;
-
-    InputInterface<rmcs_msgs::Switch> switch_left_;
-    InputInterface<rmcs_msgs::Switch> switch_right_;
-
-    std::string mesh_path_;
-    geometry::Camera camera_;
-    estimation::TargetEstimator estimator_;
-    estimation::TargetEstimator::Output output_{};
-
-    bool estimator_ready_ = false;
-    bool both_up_last_ = false;
-    bool both_down_last_ = false;
+    detection::Detector detector_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr detection_image_pub_;
+    std::unique_ptr<camera::CameraReceiver> camera_receiver_;
 };
 
 } // namespace rmcs_energy_trace_v2
