@@ -2,9 +2,7 @@
 
 namespace rmcs_energy_trace_v2::geometry {
 
-// RGB-D 相机参数。
-// 深度图必须已对齐到彩色图：两者分辨率相同、共用这组内参，彩色图上的检测框和掩码可以直接用于深度图。
-// 相机坐标系为 OpenCV 约定：x 右、y 下、z 前，单位 m
+// 相机参数，坐标系为 OpenCV 约定：x 右、y 下、z 前，单位 m
 struct Camera {
     int width = 640;
     int height = 480;

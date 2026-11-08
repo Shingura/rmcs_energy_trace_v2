@@ -34,40 +34,44 @@ public:
         auto config = detection::Detector::Config{};
         config.network_path = get_parameter("network_path").as_string();
         config.infer_threads = get_parameter_or<int>("threads", 4);
+
         if (const auto initialized = detector_.initialize(config); !initialized)
             throw std::runtime_error{initialized.error()};
 
         detection_image_pub_ =
             create_publisher<sensor_msgs::msg::Image>("/energy_trace/detection_image", 1);
-        auto receiver_config = camera::CameraReceiver::Config{};
-        receiver_config.color_topic =
-            get_parameter_or<std::string>("color_topic", "/camera/camera/color/image_raw");
-        receiver_config.depth_topic = get_parameter_or<std::string>(
-            "depth_topic", "/camera/camera/aligned_depth_to_color/image_raw");
         camera_receiver_ = std::make_unique<camera::CameraReceiver>(
-            *this, receiver_config, [this](const camera::Frame& frame) { on_frame(frame); });
+            *this, [this](const camera::Frame& frame) { on_frame(frame); });
     }
 
     void update() override {}
 
 private:
+    // For debug：从彩色图中检测能量单元并绘制
     void on_frame(const camera::Frame& frame) {
+        // 对彩色图进行检测
         const auto detections = detector_.detect(frame.bgr);
+        // 没有订阅者时直接返回，节省绘制耗时
         if (detection_image_pub_->get_subscription_count() == 0)
             return;
 
+        // 复制彩色图作为底图，保留时间戳和坐标系
         auto display = cv_bridge::CvImage{};
         display.header.stamp = frame.stamp;
         display.header.frame_id = frame.frame_id;
         display.encoding = sensor_msgs::image_encodings::BGR8;
         display.image = frame.bgr.clone();
+
         for (const auto& detection : detections) {
+            // 有掩码时，将掩码区域涂为半透明青色
             if (!detection.mask.empty()) {
                 auto tinted = display.image.clone();
                 tinted.setTo(cv::Scalar{255, 255, 0}, detection.mask);
                 cv::addWeighted(display.image, 0.5, tinted, 0.5, 0., display.image);
             }
+            // 绘制绿色检测矩形框
             cv::rectangle(display.image, detection.box, {0, 255, 0}, 2);
+            // 在框上方写上检测得分
             cv::putText(
                 display.image, std::format("{:.3f}", detection.score),
                 {static_cast<int>(detection.box.x),
