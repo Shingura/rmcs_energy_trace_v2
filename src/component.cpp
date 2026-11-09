@@ -1,6 +1,9 @@
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <memory>
+#include <optional>
+#include <rclcpp/time.hpp>
 #include <stdexcept>
 #include <string>
 
@@ -15,6 +18,7 @@
 
 #include "camera/camera_receiver.hpp"
 #include "detection/detector.hpp"
+#include "estimation/initialization.hpp"
 
 namespace rmcs_energy_trace_v2 {
 
@@ -47,8 +51,26 @@ public:
     void update() override {}
 
 private:
+    using Clock = estimation::Initialization::Clock;
+
+    // 从 ROS 时间戳转换为 estimator 单调时钟时间
+    Clock::time_point to_estimator_time(const rclcpp::Time& ros_stamp) {
+        // 初始化第一帧时间戳，作为计时起点
+        if (!first_ros_stamp_) {
+            first_ros_stamp_ = ros_stamp;
+            first_estimator_stamp_ = Clock::now();
+        }
+
+        // 计算经过时间
+        const auto delta =
+            std::chrono::nanoseconds{ros_stamp.nanoseconds() - first_ros_stamp_->nanoseconds()};
+
+        return first_estimator_stamp_ + std::chrono::duration_cast<Clock::duration>(delta);
+    }
+
     // For debug：从彩色图中检测能量单元并绘制
     void on_frame(const camera::Frame& frame) {
+        current_estimator_stamp_ = to_estimator_time(frame.stamp);
         // 对彩色图进行检测
         const auto detections = detector_.detect(frame.bgr);
         // 没有订阅者时直接返回，节省绘制耗时
@@ -84,7 +106,11 @@ private:
     OutputInterface<int> status_;
     OutputInterface<bool> is_pose_valid_;
     OutputInterface<Eigen::Isometry3d> pose_;
+
     detection::Detector detector_;
+    std::optional<rclcpp::Time> first_ros_stamp_;
+    Clock::time_point first_estimator_stamp_{};
+    Clock::time_point current_estimator_stamp_{};
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr detection_image_pub_;
     std::unique_ptr<camera::CameraReceiver> camera_receiver_;
 };
