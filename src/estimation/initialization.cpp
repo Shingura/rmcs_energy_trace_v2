@@ -8,7 +8,7 @@ namespace rmcs_energy_trace_v2::estimation {
 
 namespace {
 
-// 两个位姿之差：中心距离和长轴夹角。长轴为 z 轴，见组件输出的位姿约定
+// 两个位姿之差：中心距离和长轴（z 轴）夹角
 struct Deviation {
     double center = 0.;
     double axis_deg = 0.;

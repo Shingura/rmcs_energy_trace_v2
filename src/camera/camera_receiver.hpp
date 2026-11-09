@@ -27,7 +27,6 @@ struct Frame {
 };
 
 // 保存首次有效的彩色 CameraInfo；收到内参后，用彩色图和最近的对齐深度组成帧。
-// 采集配置在运行期间保持不变，更换配置后需重启。
 class CameraReceiver {
 public:
     using Callback = std::function<void(const Frame&)>;
