@@ -16,13 +16,13 @@
   <depend>pluginlib</depend>
   <depend>rmcs_executor</depend>
   <depend>rmcs_msgs</depend>
+  <depend>ament_index_cpp</depend>
   <depend>eigen</depend>
   <depend>libopencv-dev</depend>
   <!-- 粗配准用到 contrib 中的 surface_matching（PPF） -->
   <depend>libopencv-contrib-dev</depend>
   <depend>libpcl-all-dev</depend>
-  <!-- OpenVINO 没有 rosdep 键，由 RMCS 的 Dockerfile 安装 -->
-  <!-- 仿真用的取矿规划 pickup_plan 需要 MoveIt，是可选的开发工具，依赖不在这里声明；缺少时 CMake 跳过该目标 -->
+
 
   <test_depend>ament_cmake_gtest</test_depend>
 

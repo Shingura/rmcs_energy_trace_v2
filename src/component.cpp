@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <optional>
@@ -7,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <eigen3/Eigen/Geometry>
 #include <opencv2/imgproc.hpp>
@@ -35,9 +37,28 @@ public:
         register_output("/energy_trace/is_pose_valid", is_pose_valid_, false);
         register_output("/energy_trace/pose", pose_, Eigen::Isometry3d::Identity());
 
+        network_path_ = get_parameter_or<std::string>("network_path", "");
+        mesh_path_ = get_parameter_or<std::string>("mesh_path", "");
+        model_dir_ = get_parameter_or<std::string>("model_dir", "");
+        threads_ = get_parameter_or<int>("threads", 4);
+
+        // 留空时用包安装后的 share 目录，路径随 install 位置变化
+        const auto share = std::filesystem::path{
+            ament_index_cpp::get_package_share_directory("rmcs_energy_trace_v2")};
+        if (network_path_.empty())
+            network_path_ = (share / "assets" / "yolo11n_seg_v1.xml").string();
+        if (mesh_path_.empty())
+            mesh_path_ = (share / "meshes" / "energy_unit.stl").string();
+        if (model_dir_.empty())
+            model_dir_ = (share / "assets").string();
+
+        RCLCPP_INFO(
+            get_logger(), "network='%s' mesh='%s' model_dir='%s'", network_path_.c_str(),
+            mesh_path_.c_str(), model_dir_.c_str());
+
         auto config = detection::Detector::Config{};
-        config.network_path = get_parameter("network_path").as_string();
-        config.infer_threads = get_parameter_or<int>("threads", 4);
+        config.network_path = network_path_;
+        config.infer_threads = threads_;
 
         if (const auto initialized = detector_.initialize(config); !initialized)
             throw std::runtime_error{initialized.error()};
@@ -106,6 +127,11 @@ private:
     OutputInterface<int> status_;
     OutputInterface<bool> is_pose_valid_;
     OutputInterface<Eigen::Isometry3d> pose_;
+
+    std::string network_path_;
+    std::string mesh_path_;
+    std::string model_dir_;
+    int threads_ = 4;
 
     detection::Detector detector_;
     std::optional<rclcpp::Time> first_ros_stamp_;

@@ -159,13 +159,10 @@ install(DIRECTORY assets DESTINATION share/${PROJECT_NAME} OPTIONAL)
 
 # 仿真：读取 plan.json，在独立话题和 TF 上回放，不需要 move_group。
 find_package(kdl_parser QUIET)
-find_package(sensor_msgs QUIET)
 find_package(std_srvs QUIET)
 find_package(tf2_ros QUIET)
 find_package(visualization_msgs QUIET)
-find_package(ament_index_cpp QUIET)
-if(kdl_parser_FOUND AND sensor_msgs_FOUND AND std_srvs_FOUND AND tf2_ros_FOUND
-   AND visualization_msgs_FOUND AND ament_index_cpp_FOUND)
+if(kdl_parser_FOUND AND std_srvs_FOUND AND tf2_ros_FOUND AND visualization_msgs_FOUND)
   add_library(pickup_rviz_replay_core STATIC simulation/rviz/rviz_replay.cpp)
   target_include_directories(pickup_rviz_replay_core PUBLIC ${PROJECT_SOURCE_DIR}/simulation/rviz)
   target_link_libraries(pickup_rviz_replay_core PUBLIC Eigen3::Eigen opencv_core)
@@ -193,9 +190,8 @@ find_package(tf2_eigen QUIET)
 find_package(moveit_msgs QUIET)
 find_package(shape_msgs QUIET)
 find_package(geometry_msgs QUIET)
-find_package(ament_index_cpp QUIET)
 if(moveit_ros_planning_interface_FOUND AND tf2_eigen_FOUND AND moveit_msgs_FOUND
-   AND shape_msgs_FOUND AND geometry_msgs_FOUND AND ament_index_cpp_FOUND)
+   AND shape_msgs_FOUND AND geometry_msgs_FOUND)
   add_executable(pickup_plan simulation/planning/pickup_plan.cpp)
   target_compile_definitions(pickup_plan PRIVATE
     RMCS_ENERGY_TRACE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
