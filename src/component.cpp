@@ -21,10 +21,12 @@
 #include "camera/camera_receiver.hpp"
 #include "detection/detector.hpp"
 #include "estimation/initialization.hpp"
+#include "estimation/target_estimator.hpp"
 
 namespace rmcs_energy_trace_v2 {
 
-// 当前只接入相机和检测。位姿输出保持等待状态，不初始化位姿估计器或响应遥控器。
+// 接入相机、检测与目标估计器。估计器在首帧拿到真实内参后初始化，尚未逐帧推进；
+// 位姿输出保持等待状态，不响应遥控器。
 class EnergyTraceComponent final
     : public rmcs_executor::Component
     , public rclcpp::Node {
@@ -89,9 +91,30 @@ private:
         return first_estimator_stamp_ + std::chrono::duration_cast<Clock::duration>(delta);
     }
 
+    // 初始化 estimator
+    void initialize_estimator(const geometry::Camera& camera) {
+        estimator_initialized_ = true;
+
+        auto config = estimation::TargetEstimator::Config{};
+        config.camera = camera;
+        config.threads = threads_;
+        config.detector.network_path = network_path_;
+        config.tracker.model_dir = model_dir_;
+
+        if (const auto initialized = estimator_.initialize(mesh_path_, config); !initialized)
+            RCLCPP_ERROR(get_logger(), "Target estimator: %s", initialized.error().c_str());
+        else
+            RCLCPP_INFO(
+                get_logger(), "Target estimator initialized, %dx%d", camera.width, camera.height);
+    }
+
     // For debug：从彩色图中检测能量单元并绘制
     void on_frame(const camera::Frame& frame) {
         current_estimator_stamp_ = to_estimator_time(frame.stamp);
+
+        if (!estimator_initialized_)
+            initialize_estimator(frame.camera);
+
         // 对彩色图进行检测
         const auto detections = detector_.detect(frame.bgr);
         // 没有订阅者时直接返回，节省绘制耗时
@@ -134,6 +157,8 @@ private:
     int threads_ = 4;
 
     detection::Detector detector_;
+    estimation::TargetEstimator estimator_;
+    bool estimator_initialized_ = false;
     std::optional<rclcpp::Time> first_ros_stamp_;
     Clock::time_point first_estimator_stamp_{};
     Clock::time_point current_estimator_stamp_{};
