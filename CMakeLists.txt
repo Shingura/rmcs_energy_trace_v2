@@ -153,7 +153,7 @@ endif()
 
 pluginlib_export_plugin_description_file(rmcs_executor plugins.xml)
 
-install(DIRECTORY config meshes DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY meshes DESTINATION share/${PROJECT_NAME})
 # assets/ 由 scripts/download_assets.sh 下载，不在仓库中；还没下载时跳过
 install(DIRECTORY assets DESTINATION share/${PROJECT_NAME} OPTIONAL)
 
