@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cv_bridge/cv_bridge.hpp>
@@ -29,8 +30,8 @@
 
 namespace rmcs_energy_trace_v2 {
 
-// 接入相机、检测与目标估计器。估计器在首帧拿到真实内参后初始化，尚未逐帧推进；
-// 位姿输出保持等待状态，不响应遥控器。
+// 接入相机、检测与目标估计器。估计器在首帧拿到真实内参后初始化，由工作线程逐帧推进；
+// 位姿输出仍保持等待状态，不响应遥控器。
 class EnergyTraceComponent final
     : public rmcs_executor::Component
     , public rclcpp::Node {
@@ -73,12 +74,29 @@ public:
             create_publisher<sensor_msgs::msg::Image>("/energy_trace/detection_image", 1);
         camera_receiver_ = std::make_unique<camera::CameraReceiver>(
             *this, [this](const camera::Frame& frame) { on_frame(frame); });
+
+        // 在独立工作线程中运行 work_loop()
+        worker_ = std::thread{[this] { work_loop(); }};
+    }
+
+    ~EnergyTraceComponent() override {
+        camera_receiver_.reset();
+        // 组件析构时将 should_stop_ 置为 true，停止 worker_ 线程
+        should_stop_.store(true);
+        if (worker_.joinable())
+            worker_.join();
     }
 
     void update() override {}
 
 private:
     using Clock = estimation::Initialization::Clock;
+
+    // 帧队列元素，同时包括帧本身与其时间戳
+    struct QueuedFrame {
+        camera::Frame frame;
+        Clock::time_point stamp;
+    };
 
     // 从 ROS 时间戳转换为 estimator 单调时钟时间
     Clock::time_point to_estimator_time(const rclcpp::Time& ros_stamp) {
@@ -112,30 +130,57 @@ private:
                 get_logger(), "Target estimator initialized, %dx%d", camera.width, camera.height);
     }
 
-    // 加入帧队列
-    void push_frame(const camera::Frame& frame) {
+    // 在相机回调线程中写入帧队列
+    void push_frame(const camera::Frame& frame, Clock::time_point stamp) {
         const auto lock = std::lock_guard{queue_mutex_};
         if (frame_queue_.size() >= kFrameQueueCapacity) {
-
             // 初始化完成后，丢弃最旧帧，以确保跟踪的实时性
             if (estimator_status_.load()
                 == static_cast<int>(estimation::Initialization::Status::kReady))
                 frame_queue_.pop_front();
-
             // 初始化完成前，丢弃最新帧
             else
                 return;
         }
-        frame_queue_.push_back(frame);
+        frame_queue_.push_back(QueuedFrame{frame, stamp});
     }
 
+    // 为工作线程从帧队列头部取出一帧
+    std::optional<QueuedFrame> pop_frame() {
+        const auto lock = std::lock_guard{queue_mutex_};
+        if (frame_queue_.empty())
+            return std::nullopt;
+        auto frame = std::move(frame_queue_.front());
+        frame_queue_.pop_front();
+        return frame;
+    }
+
+    // 在工作线程中循环取帧并更新估计器状态
+    void work_loop() {
+        while (!should_stop_.load()) {
+            const auto queued_frame = pop_frame();
+            // 返回空值时，休眠 1ms 后进入下一轮循环
+            if (!queued_frame) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                continue;
+            }
+
+            // 取到帧时，传入 estimator_.update() 执行一次估计
+            const auto output = estimator_.update(
+                queued_frame->frame.bgr, queued_frame->frame.depth, camera_to_base_,
+                queued_frame->stamp);
+            estimator_status_.store(static_cast<int>(output.status));
+        }
+    }
+
+    // 相机订阅回调函数
     void on_frame(const camera::Frame& frame) {
-        current_estimator_stamp_ = to_estimator_time(frame.stamp);
+        const auto stamp = to_estimator_time(frame.stamp);
 
         if (!estimator_initialized_)
             initialize_estimator(frame.camera);
 
-        push_frame(frame);
+        push_frame(frame, stamp);
 
         // 对彩色图进行检测
         const auto detections = detector_.detect(frame.bgr);
@@ -185,16 +230,21 @@ private:
     // 帧队列长度，默认为 30 帧
     static constexpr std::size_t kFrameQueueCapacity = 30;
 
-    // 使用 std::deque 维护帧队列。初始化阶段丢弃最新帧，跟踪阶段丢弃最旧帧
-    std::deque<camera::Frame> frame_queue_;
+    // 使用 std::deque 维护帧队列
+    std::deque<QueuedFrame> frame_queue_;
     std::mutex queue_mutex_;
 
     // 估计器状态的最新副本
     std::atomic<int> estimator_status_{static_cast<int>(estimation::Initialization::Status::kIdle)};
 
+    // 相机坐标系到基座坐标系的变换
+    Eigen::Isometry3d camera_to_base_ = Eigen::Isometry3d::Identity();
+
+    std::thread worker_;
+    std::atomic<bool> should_stop_{false};
+
     std::optional<rclcpp::Time> first_ros_stamp_;
     Clock::time_point first_estimator_stamp_{};
-    Clock::time_point current_estimator_stamp_{};
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr detection_image_pub_;
     std::unique_ptr<camera::CameraReceiver> camera_receiver_;
