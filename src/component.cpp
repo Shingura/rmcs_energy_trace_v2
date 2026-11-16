@@ -1,10 +1,13 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <optional>
-#include <rclcpp/time.hpp>
 #include <stdexcept>
 #include <string>
 
@@ -14,6 +17,7 @@
 #include <opencv2/imgproc.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/time.hpp>
 #include <rmcs_executor/component.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -108,12 +112,30 @@ private:
                 get_logger(), "Target estimator initialized, %dx%d", camera.width, camera.height);
     }
 
-    // For debug：从彩色图中检测能量单元并绘制
+    // 加入帧队列
+    void push_frame(const camera::Frame& frame) {
+        const auto lock = std::lock_guard{queue_mutex_};
+        if (frame_queue_.size() >= kFrameQueueCapacity) {
+
+            // 初始化完成后，丢弃最旧帧，以确保跟踪的实时性
+            if (estimator_status_.load()
+                == static_cast<int>(estimation::Initialization::Status::kReady))
+                frame_queue_.pop_front();
+
+            // 初始化完成前，丢弃最新帧
+            else
+                return;
+        }
+        frame_queue_.push_back(frame);
+    }
+
     void on_frame(const camera::Frame& frame) {
         current_estimator_stamp_ = to_estimator_time(frame.stamp);
 
         if (!estimator_initialized_)
             initialize_estimator(frame.camera);
+
+        push_frame(frame);
 
         // 对彩色图进行检测
         const auto detections = detector_.detect(frame.bgr);
@@ -159,9 +181,21 @@ private:
     detection::Detector detector_;
     estimation::TargetEstimator estimator_;
     bool estimator_initialized_ = false;
+
+    // 帧队列长度，默认为 30 帧
+    static constexpr std::size_t kFrameQueueCapacity = 30;
+
+    // 使用 std::deque 维护帧队列。初始化阶段丢弃最新帧，跟踪阶段丢弃最旧帧
+    std::deque<camera::Frame> frame_queue_;
+    std::mutex queue_mutex_;
+
+    // 估计器状态的最新副本
+    std::atomic<int> estimator_status_{static_cast<int>(estimation::Initialization::Status::kIdle)};
+
     std::optional<rclcpp::Time> first_ros_stamp_;
     Clock::time_point first_estimator_stamp_{};
     Clock::time_point current_estimator_stamp_{};
+
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr detection_image_pub_;
     std::unique_ptr<camera::CameraReceiver> camera_receiver_;
 };
