@@ -31,7 +31,7 @@
 namespace rmcs_energy_trace_v2 {
 
 // 接入相机、检测与目标估计器。估计器在首帧拿到真实内参后初始化，由工作线程逐帧推进；
-// 位姿输出仍保持等待状态，不响应遥控器。
+// 主线程输出最近估计结果，尚未响应遥控器。
 class EnergyTraceComponent final
     : public rmcs_executor::Component
     , public rclcpp::Node {
@@ -87,7 +87,12 @@ public:
             worker_.join();
     }
 
-    void update() override {}
+    void update() override {
+        const auto lock = std::lock_guard{result_mutex_};
+        *status_ = latest_estimation_result_.status;
+        *is_pose_valid_ = latest_estimation_result_.is_pose_valid;
+        *pose_ = latest_estimation_result_.pose;
+    }
 
 private:
     using Clock = estimation::Initialization::Clock;
@@ -98,6 +103,13 @@ private:
         Clock::time_point stamp;
     };
 
+    // 工作线程与主线程共享的最近估计结果
+    struct LatestEstimationResult {
+        int status = static_cast<int>(estimation::Initialization::Status::kIdle);
+        bool is_pose_valid = false;
+        Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+    };
+
     // 从 ROS 时间戳转换为 estimator 单调时钟时间
     Clock::time_point to_estimator_time(const rclcpp::Time& ros_stamp) {
         // 初始化第一帧时间戳，作为计时起点
@@ -105,11 +117,9 @@ private:
             first_ros_stamp_ = ros_stamp;
             first_estimator_stamp_ = Clock::now();
         }
-
         // 计算经过时间
         const auto delta =
             std::chrono::nanoseconds{ros_stamp.nanoseconds() - first_ros_stamp_->nanoseconds()};
-
         return first_estimator_stamp_ + std::chrono::duration_cast<Clock::duration>(delta);
     }
 
@@ -170,6 +180,16 @@ private:
                 queued_frame->frame.bgr, queued_frame->frame.depth, camera_to_base_,
                 queued_frame->stamp);
             estimator_status_.store(static_cast<int>(output.status));
+
+            {
+                const auto lock = std::lock_guard{result_mutex_};
+                latest_estimation_result_.status = static_cast<int>(output.status);
+                latest_estimation_result_.is_pose_valid = output.pose_valid;
+                latest_estimation_result_.pose =
+                    output.status == estimation::Initialization::Status::kReady
+                        ? output.reference_pose
+                        : output.pose;
+            }
         }
     }
 
@@ -229,6 +249,10 @@ private:
 
     // 帧队列长度，默认为 30 帧
     static constexpr std::size_t kFrameQueueCapacity = 30;
+
+    // 最近估计结果
+    LatestEstimationResult latest_estimation_result_{};
+    std::mutex result_mutex_;
 
     // 使用 std::deque 维护帧队列
     std::deque<QueuedFrame> frame_queue_;
