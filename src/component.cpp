@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cv_bridge/cv_bridge.hpp>
@@ -69,6 +70,17 @@ public:
             get_logger(), "network='%s' mesh='%s' model_dir='%s'", network_path_.c_str(),
             mesh_path_.c_str(), model_dir_.c_str());
 
+        const auto camera_translation = get_parameter_or<std::vector<double>>(
+            "camera_translation", std::vector<double>{0., 0., 0.});
+        const auto camera_rpy =
+            get_parameter_or<std::vector<double>>("camera_rpy", std::vector<double>{0., 0., 0.});
+        camera_to_base_ = make_camera_to_base(camera_translation, camera_rpy);
+
+        RCLCPP_INFO(
+            get_logger(), "camera_translation=[%.4f, %.4f, %.4f] camera_rpy=[%.4f, %.4f, %.4f]",
+            camera_translation[0], camera_translation[1], camera_translation[2], camera_rpy[0],
+            camera_rpy[1], camera_rpy[2]);
+
         auto config = detection::Detector::Config{};
         config.network_path = network_path_;
         config.infer_threads = threads_;
@@ -120,6 +132,33 @@ private:
 
     // 主线程发往工作线程的控制指令
     enum class Command : std::uint8_t { kNone, kStart, kReset };
+
+    // 按 ROS 相机系参数（外旋 XYZ / 内旋 ZYX 的 RPY）构造 OpenCV 光学系到底座的变换
+    static Eigen::Isometry3d make_camera_to_base(
+        const std::vector<double>& translation, const std::vector<double>& rpy) {
+        if (translation.size() != 3)
+            throw std::runtime_error{
+                "Parameter 'camera_translation' must have 3 elements, got "
+                + std::to_string(translation.size())};
+        if (rpy.size() != 3)
+            throw std::runtime_error{
+                "Parameter 'camera_rpy' must have 3 elements, got " + std::to_string(rpy.size())};
+
+        const auto rotation = Eigen::Quaterniond{
+            Eigen::AngleAxisd{rpy[2], Eigen::Vector3d::UnitZ()}
+            * Eigen::AngleAxisd{rpy[1], Eigen::Vector3d::UnitY()}
+            * Eigen::AngleAxisd{rpy[0], Eigen::Vector3d::UnitX()}};
+        const auto optical_to_ros = Eigen::Matrix3d{
+            {0., 0., 1.},
+            {-1., 0., 0.},
+            {0., -1., 0.},
+        };
+
+        auto transform = Eigen::Isometry3d::Identity();
+        transform.linear() = rotation.toRotationMatrix() * optical_to_ros;
+        transform.translation() = Eigen::Vector3d{translation[0], translation[1], translation[2]};
+        return transform;
+    }
 
     // 读取遥控器左右拨杆：先双下解锁，之后双下或断联复位，左上右下触发初始化
     void handle_remote() {
