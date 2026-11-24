@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <format>
@@ -20,6 +21,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/time.hpp>
 #include <rmcs_executor/component.hpp>
+#include <rmcs_msgs/switch.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
@@ -30,8 +32,8 @@
 
 namespace rmcs_energy_trace_v2 {
 
-// 接入相机、检测与目标估计器。估计器在首帧拿到真实内参后初始化，由工作线程逐帧推进；
-// 主线程输出最近估计结果，尚未响应遥控器。
+// 接入相机、检测、目标估计器与遥控器。估计器在首帧拿到真实内参后初始化，
+// 由工作线程逐帧推进，主线程响应遥控器双下解锁/复位、左上右下启动并输出最近估计结果。
 class EnergyTraceComponent final
     : public rmcs_executor::Component
     , public rclcpp::Node {
@@ -43,6 +45,10 @@ public:
         register_output("/energy_trace/status", status_, 0);
         register_output("/energy_trace/is_pose_valid", is_pose_valid_, false);
         register_output("/energy_trace/pose", pose_, Eigen::Isometry3d::Identity());
+
+        // 遥控器不是必须的：没有接遥控器时，跳过开关读取
+        register_input("/remote/switch/left", switch_left_, false);
+        register_input("/remote/switch/right", switch_right_, false);
 
         network_path_ = get_parameter_or<std::string>("network_path", "");
         mesh_path_ = get_parameter_or<std::string>("mesh_path", "");
@@ -88,6 +94,8 @@ public:
     }
 
     void update() override {
+        handle_remote();
+
         const auto lock = std::lock_guard{result_mutex_};
         *status_ = latest_estimation_result_.status;
         *is_pose_valid_ = latest_estimation_result_.is_pose_valid;
@@ -109,6 +117,50 @@ private:
         bool is_pose_valid = false;
         Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
     };
+
+    // 主线程发往工作线程的控制指令
+    enum class Command : std::uint8_t { kNone, kStart, kReset };
+
+    // 读取遥控器左右拨杆：先双下解锁，之后双下或断联复位，左上右下触发初始化
+    void handle_remote() {
+        if (!switch_left_.ready() || !switch_right_.ready())
+            return;
+
+        const auto left = *switch_left_;
+        const auto right = *switch_right_;
+
+        if (!remote_unlocked_) {
+            if (left == rmcs_msgs::Switch::DOWN && right == rmcs_msgs::Switch::DOWN)
+                remote_unlocked_ = true;
+            last_switch_left_ = left;
+            last_switch_right_ = right;
+            return;
+        }
+
+        const auto is_reset = (left == rmcs_msgs::Switch::DOWN && right == rmcs_msgs::Switch::DOWN)
+                           || left == rmcs_msgs::Switch::UNKNOWN
+                           || right == rmcs_msgs::Switch::UNKNOWN;
+        const auto was_reset = (last_switch_left_ == rmcs_msgs::Switch::DOWN
+                                && last_switch_right_ == rmcs_msgs::Switch::DOWN)
+                            || last_switch_left_ == rmcs_msgs::Switch::UNKNOWN
+                            || last_switch_right_ == rmcs_msgs::Switch::UNKNOWN;
+        if (is_reset) {
+            if (!was_reset)
+                pending_command_.store(Command::kReset);
+            last_switch_left_ = left;
+            last_switch_right_ = right;
+            return;
+        }
+
+        const auto is_start = left == rmcs_msgs::Switch::UP && right == rmcs_msgs::Switch::DOWN;
+        const auto was_start = last_switch_left_ == rmcs_msgs::Switch::UP
+                            && last_switch_right_ == rmcs_msgs::Switch::DOWN;
+        if (is_start && !was_start)
+            pending_command_.store(Command::kStart);
+
+        last_switch_left_ = left;
+        last_switch_right_ = right;
+    }
 
     // 从 ROS 时间戳转换为 estimator 单调时钟时间
     Clock::time_point to_estimator_time(const rclcpp::Time& ros_stamp) {
@@ -133,11 +185,13 @@ private:
         config.detector.network_path = network_path_;
         config.tracker.model_dir = model_dir_;
 
-        if (const auto initialized = estimator_.initialize(mesh_path_, config); !initialized)
+        if (const auto initialized = estimator_.initialize(mesh_path_, config); !initialized) {
             RCLCPP_ERROR(get_logger(), "Target estimator: %s", initialized.error().c_str());
-        else
+        } else {
+            estimator_ready_.store(true);
             RCLCPP_INFO(
                 get_logger(), "Target estimator initialized, %dx%d", camera.width, camera.height);
+        }
     }
 
     // 在相机回调线程中写入帧队列
@@ -165,14 +219,47 @@ private:
         return frame;
     }
 
-    // 在工作线程中循环取帧并更新估计器状态
+    // 复位时清空帧队列
+    void clear_frame_queue() {
+        const auto lock = std::lock_guard{queue_mutex_};
+        frame_queue_.clear();
+    }
+
+    // 在工作线程中循环处理指令、取帧并更新估计器状态
     void work_loop() {
+        auto pending_start = false;
+
         while (!should_stop_.load()) {
+            const auto command = pending_command_.exchange(Command::kNone);
+            if (command == Command::kReset) {
+                pending_start = false;
+                clear_frame_queue();
+                if (estimator_ready_.load())
+                    estimator_.reset();
+                estimator_status_.store(
+                    static_cast<int>(estimation::Initialization::Status::kIdle));
+                {
+                    const auto lock = std::lock_guard{result_mutex_};
+                    latest_estimation_result_ = LatestEstimationResult{};
+                }
+                continue;
+            }
+            if (command == Command::kStart && estimator_ready_.load())
+                pending_start = true;
+
             const auto queued_frame = pop_frame();
             // 返回空值时，休眠 1ms 后进入下一轮循环
             if (!queued_frame) {
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
                 continue;
+            }
+
+            if (!estimator_ready_.load())
+                continue;
+
+            if (pending_start) {
+                estimator_.start(queued_frame->stamp);
+                pending_start = false;
             }
 
             // 取到帧时，传入 estimator_.update() 执行一次估计
@@ -234,6 +321,8 @@ private:
         detection_image_pub_->publish(*display.toImageMsg());
     }
 
+    InputInterface<rmcs_msgs::Switch> switch_left_;
+    InputInterface<rmcs_msgs::Switch> switch_right_;
     OutputInterface<int> status_;
     OutputInterface<bool> is_pose_valid_;
     OutputInterface<Eigen::Isometry3d> pose_;
@@ -246,6 +335,7 @@ private:
     detection::Detector detector_;
     estimation::TargetEstimator estimator_;
     bool estimator_initialized_ = false;
+    std::atomic<bool> estimator_ready_{false};
 
     // 帧队列长度，默认为 30 帧
     static constexpr std::size_t kFrameQueueCapacity = 30;
@@ -263,6 +353,11 @@ private:
 
     // 相机坐标系到基座坐标系的变换
     Eigen::Isometry3d camera_to_base_ = Eigen::Isometry3d::Identity();
+
+    std::atomic<Command> pending_command_{Command::kNone};
+    bool remote_unlocked_ = false;
+    rmcs_msgs::Switch last_switch_left_ = rmcs_msgs::Switch::UNKNOWN;
+    rmcs_msgs::Switch last_switch_right_ = rmcs_msgs::Switch::UNKNOWN;
 
     std::thread worker_;
     std::atomic<bool> should_stop_{false};
