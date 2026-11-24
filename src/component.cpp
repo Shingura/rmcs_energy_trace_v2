@@ -17,6 +17,8 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <eigen3/Eigen/Geometry>
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <opencv2/imgproc.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -25,11 +27,13 @@
 #include <rmcs_msgs/switch.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 
 #include "camera/camera_receiver.hpp"
 #include "detection/detector.hpp"
 #include "estimation/initialization.hpp"
 #include "estimation/target_estimator.hpp"
+#include "geometry/mesh.hpp"
 
 namespace rmcs_energy_trace_v2 {
 
@@ -88,8 +92,15 @@ public:
         if (const auto initialized = detector_.initialize(config); !initialized)
             throw std::runtime_error{initialized.error()};
 
+        const auto mesh = geometry::load_binary_stl(mesh_path_);
+        if (!mesh)
+            throw std::runtime_error{mesh.error()};
+        unit_marker_template_ = make_unit_marker_template(*mesh);
+
         detection_image_pub_ =
             create_publisher<sensor_msgs::msg::Image>("/energy_trace/detection_image", 1);
+        pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/energy_trace/pose", 1);
+        marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/energy_trace/marker", 1);
         camera_receiver_ = std::make_unique<camera::CameraReceiver>(
             *this, [this](const camera::Frame& frame) { on_frame(frame); });
 
@@ -132,6 +143,122 @@ private:
 
     // 主线程发往工作线程的控制指令
     enum class Command : std::uint8_t { kNone, kStart, kReset };
+
+    static constexpr const char* status_name(estimation::Initialization::Status status) noexcept {
+        switch (status) {
+        case estimation::Initialization::Status::kIdle: return "idle";
+        case estimation::Initialization::Status::kInitializing: return "initializing";
+        case estimation::Initialization::Status::kReady: return "ready";
+        case estimation::Initialization::Status::kFailed: return "failed";
+        }
+        return "unknown";
+    }
+
+    // 在工作线程按状态变化或固定周期打印估计结果
+    void log_estimation(
+        estimation::Initialization::Status status, bool pose_valid,
+        const Eigen::Isometry3d& pose) const {
+        if (status == estimation::Initialization::Status::kReady || pose_valid) {
+            const Eigen::Vector3d t = pose.translation();
+            const Eigen::Vector3d z = pose.linear().col(2);
+            const auto q = Eigen::Quaterniond{pose.linear()};
+            RCLCPP_INFO(
+                get_logger(),
+                "status=%s valid=%d t=[%.4f, %.4f, %.4f] z=[%.3f, %.3f, %.3f] "
+                "q=[%.3f, %.3f, %.3f, %.3f]",
+                status_name(status), static_cast<int>(pose_valid), t.x(), t.y(), t.z(), z.x(),
+                z.y(), z.z(), q.w(), q.x(), q.y(), q.z());
+        } else {
+            RCLCPP_INFO(
+                get_logger(), "status=%s valid=%d", status_name(status),
+                static_cast<int>(pose_valid));
+        }
+    }
+
+    static geometry_msgs::msg::Pose to_pose_msg(const Eigen::Isometry3d& transform) {
+        auto message = geometry_msgs::msg::Pose{};
+        const Eigen::Vector3d t = transform.translation();
+        const auto q = Eigen::Quaterniond{transform.linear()};
+        message.position.x = t.x();
+        message.position.y = t.y();
+        message.position.z = t.z();
+        message.orientation.w = q.w();
+        message.orientation.x = q.x();
+        message.orientation.y = q.y();
+        message.orientation.z = q.z();
+        return message;
+    }
+
+    // 预构造按原点居中的能量单元 TRIANGLE_LIST 网格模板
+    static visualization_msgs::msg::Marker make_unit_marker_template(const geometry::Mesh& mesh) {
+        auto marker = visualization_msgs::msg::Marker{};
+        marker.header.frame_id = kBaseFrame;
+        marker.ns = "energy_unit";
+        marker.id = 0;
+        marker.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
+        marker.action = visualization_msgs::msg::Marker::ADD;
+        marker.pose.orientation.w = 1.;
+        marker.scale.x = 1.;
+        marker.scale.y = 1.;
+        marker.scale.z = 1.;
+        marker.points.reserve(mesh.triangles.size() * 3);
+        for (const auto& triangle : mesh.triangles) {
+            for (const auto& vertex : triangle) {
+                auto point = geometry_msgs::msg::Point{};
+                point.x = static_cast<double>(vertex.x());
+                point.y = static_cast<double>(vertex.y());
+                point.z = static_cast<double>(vertex.z());
+                marker.points.push_back(point);
+            }
+        }
+        return marker;
+    }
+
+    void publish_pose(const rclcpp::Time& stamp, const Eigen::Isometry3d& pose) const {
+        if (pose_pub_->get_subscription_count() == 0)
+            return;
+
+        auto message = geometry_msgs::msg::PoseStamped{};
+        message.header.stamp = stamp;
+        message.header.frame_id = kBaseFrame;
+        message.pose = to_pose_msg(pose);
+        pose_pub_->publish(message);
+    }
+
+    void publish_marker(
+        const rclcpp::Time& stamp, estimation::Initialization::Status status,
+        const Eigen::Isometry3d& pose) {
+        if (marker_pub_->get_subscription_count() == 0)
+            return;
+
+        unit_marker_template_.header.stamp = stamp;
+        unit_marker_template_.pose = to_pose_msg(pose);
+        if (status == estimation::Initialization::Status::kReady) {
+            unit_marker_template_.color.r = 0.15f;
+            unit_marker_template_.color.g = 0.85f;
+            unit_marker_template_.color.b = 0.35f;
+            unit_marker_template_.color.a = 0.85f;
+        } else {
+            unit_marker_template_.color.r = 0.95f;
+            unit_marker_template_.color.g = 0.62f;
+            unit_marker_template_.color.b = 0.12f;
+            unit_marker_template_.color.a = 0.65f;
+        }
+        marker_pub_->publish(unit_marker_template_);
+    }
+
+    void delete_marker(const rclcpp::Time& stamp) const {
+        if (marker_pub_->get_subscription_count() == 0)
+            return;
+
+        auto marker = visualization_msgs::msg::Marker{};
+        marker.header.stamp = stamp;
+        marker.header.frame_id = kBaseFrame;
+        marker.ns = "energy_unit";
+        marker.id = 0;
+        marker.action = visualization_msgs::msg::Marker::DELETE;
+        marker_pub_->publish(marker);
+    }
 
     // 按 ROS 相机系参数（外旋 XYZ / 内旋 ZYX 的 RPY）构造 OpenCV 光学系到底座的变换
     static Eigen::Isometry3d make_camera_to_base(
@@ -267,6 +394,10 @@ private:
     // 在工作线程中循环处理指令、取帧并更新估计器状态
     void work_loop() {
         auto pending_start = false;
+        auto last_status = estimation::Initialization::Status::kIdle;
+        auto marker_visible = false;
+        std::optional<Clock::time_point> last_log_time;
+        std::optional<Clock::time_point> last_marker_time;
 
         while (!should_stop_.load()) {
             const auto command = pending_command_.exchange(Command::kNone);
@@ -281,10 +412,25 @@ private:
                     const auto lock = std::lock_guard{result_mutex_};
                     latest_estimation_result_ = LatestEstimationResult{};
                 }
+                if (marker_visible) {
+                    delete_marker(this->now());
+                    marker_visible = false;
+                    last_marker_time.reset();
+                }
+                last_status = estimation::Initialization::Status::kIdle;
+                last_log_time = Clock::now();
+                RCLCPP_INFO(get_logger(), "Estimator reset by remote");
                 continue;
             }
-            if (command == Command::kStart && estimator_ready_.load())
-                pending_start = true;
+            if (command == Command::kStart) {
+                if (estimator_ready_.load()) {
+                    pending_start = true;
+                    RCLCPP_INFO(get_logger(), "Estimator start requested by remote");
+                } else {
+                    RCLCPP_WARN(
+                        get_logger(), "Estimator start ignored: waiting for first camera frame");
+                }
+            }
 
             const auto queued_frame = pop_frame();
             // 返回空值时，休眠 1ms 后进入下一轮循环
@@ -306,16 +452,42 @@ private:
                 queued_frame->frame.bgr, queued_frame->frame.depth, camera_to_base_,
                 queued_frame->stamp);
             estimator_status_.store(static_cast<int>(output.status));
+            const auto output_pose = output.status == estimation::Initialization::Status::kReady
+                                       ? output.reference_pose
+                                       : output.pose;
 
             {
                 const auto lock = std::lock_guard{result_mutex_};
                 latest_estimation_result_.status = static_cast<int>(output.status);
                 latest_estimation_result_.is_pose_valid = output.pose_valid;
-                latest_estimation_result_.pose =
-                    output.status == estimation::Initialization::Status::kReady
-                        ? output.reference_pose
-                        : output.pose;
+                latest_estimation_result_.pose = output_pose;
             }
+
+            const auto status_changed = output.status != last_status;
+            const auto has_pose =
+                output.status == estimation::Initialization::Status::kReady || output.pose_valid;
+            const auto steady_now = Clock::now();
+
+            if (status_changed || !last_log_time || steady_now - *last_log_time >= kLogPeriod) {
+                log_estimation(output.status, output.pose_valid, output_pose);
+                last_log_time = steady_now;
+            }
+
+            if (has_pose) {
+                publish_pose(queued_frame->frame.stamp, output_pose);
+                if (!marker_visible || status_changed || !last_marker_time
+                    || steady_now - *last_marker_time >= kMarkerPeriod) {
+                    publish_marker(queued_frame->frame.stamp, output.status, output_pose);
+                    marker_visible = true;
+                    last_marker_time = steady_now;
+                }
+            } else if (marker_visible) {
+                delete_marker(queued_frame->frame.stamp);
+                marker_visible = false;
+                last_marker_time.reset();
+            }
+
+            last_status = output.status;
         }
     }
 
@@ -376,8 +548,14 @@ private:
     bool estimator_initialized_ = false;
     std::atomic<bool> estimator_ready_{false};
 
+    // RViz 位姿与网格话题使用的机械臂底座坐标系名称
+    static constexpr const char* kBaseFrame = "base_link";
     // 帧队列长度，默认为 30 帧
     static constexpr std::size_t kFrameQueueCapacity = 30;
+    // 终端日志的周期输出间隔
+    static constexpr auto kLogPeriod = std::chrono::seconds{1};
+    // 网格标记在状态未变化时的刷新间隔
+    static constexpr auto kMarkerPeriod = std::chrono::milliseconds{200};
 
     // 最近估计结果
     LatestEstimationResult latest_estimation_result_{};
@@ -404,7 +582,11 @@ private:
     std::optional<rclcpp::Time> first_ros_stamp_;
     Clock::time_point first_estimator_stamp_{};
 
+    visualization_msgs::msg::Marker unit_marker_template_;
+
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr detection_image_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
     std::unique_ptr<camera::CameraReceiver> camera_receiver_;
 };
 
