@@ -93,18 +93,19 @@ lsusb | grep -i intel || echo "no Intel USB device"
 
 依赖正常时，`ldd` 输出 `all libs ok`（没有 `not found` 行），`ros2 pkg prefix` 输出 `/opt/ros/jazzy`，`lsusb` 列出 Intel RealSense 设备。
 
-2. 若提示缺库或找不到 `realsense2_camera`，在远程终端补装运行依赖（标准运行镜像通常缺少 OpenCV contrib 运行库、RealSense 驱动和 MoveIt Task Constructor）：
+2. 若提示缺库或找不到 `realsense2_camera`，在远程终端补装运行依赖：
 
 ```bash
 apt-get update && apt-get install -y \
   libopencv-contrib406t64 \
   ros-jazzy-realsense2-camera \
   ros-jazzy-librealsense2 \
+  ros-jazzy-compressed-image-transport \
   ros-jazzy-moveit-task-constructor-core \
   ros-jazzy-moveit-task-constructor-msgs
 ```
 
-安装完成后，再运行一次第 1 步的检查命令。
+安装完成后，再运行一次第 1 步的检查命令。新装 `ros-jazzy-compressed-image-transport` 后，需要重启一次 `service rmcs` 才会启用相机压缩话题。
 
 ### 3. 启动程序并查看终端日志
 
@@ -120,7 +121,7 @@ service rmcs restart && service rmcs attach
 
 启动正常时，终端输出以下内容（示例省略日志中的时间戳片段）：
 
-- `rmcs_executor` 正常加载各组件，没有缺少输入接口的报错。因为没有加载兑矿组件，`arm_controller` 每秒打印一次 `pillar_pose not ready` 警告，属于正常情况。
+- `rmcs_executor` 正常加载各组件，没有缺少输入接口的报错。未加载兑矿组件时，`arm_controller` 每秒打印一次 `pillar_pose not ready` 警告，属于正常情况。
 - `energy_trace` 打印资产路径和外参配置，收到相机首帧后打印内参（数值随具体设备略有差异）与初始化完成消息，随后每秒打印一次空闲状态：
 
 ```text
@@ -131,30 +132,50 @@ service rmcs restart && service rmcs attach
 [INFO] [energy_trace]: status=idle valid=0
 ```
 
+未加载兑矿组件时，`arm_controller` 每秒打印一次 `pillar_pose not ready` 占满屏幕。另开一个远程终端过滤 `/rosout`，可以只看 `energy_trace` 的日志：
+
+```bash
+ros2 topic echo /rosout --filter "m.name == 'energy_trace'" --full-length
+```
+
 ### 4. 查看相机画面、检测叠加图和三维位姿
 
-车上容器默认设置 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`，开发电脑默认收不到车上的 ROS 2 话题。
+车上容器默认设置 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`，开发电脑默认收不到车上的 ROS 2 话题。相机默认以 640×480、30 Hz 输出彩色图和对齐深度图。
 
 **方式一：使用 Foxglove Studio 查看图像和三维场景**
 
-1. 另开一个远程终端，启动 `foxglove_bridge`（监听 `8765` 端口）：
+1. 在远程终端启动检测图压缩节点（把 `/energy_trace/detection_image` 转成 JPEG 压缩话题）：
 
 ```bash
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+ros2 run image_transport republish --ros-args \
+  -p in_transport:=raw \
+  -p out_transport:=compressed \
+  -r in:=/energy_trace/detection_image \
+  -r out/compressed:=/energy_trace/detection_image/compressed
 ```
 
-2. 在开发电脑打开 Foxglove Studio，连接地址填写 `ws://<robot_ip>:8765`。
-3. 在对应面板订阅这些话题（在 3D 面板把 Fixed Frame 设为 `base_link` 并开启 TF 与 `/robot_description` 显示）：
+2. 另开一个远程终端启动 `foxglove_bridge`（限制发送缓冲以降低延迟，并关闭参数订阅避免 MoveIt 未初始化参数报错）：
+
+```bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml \
+  port:=8765 \
+  max_qos_depth:=1 \
+  send_buffer_limit:=1000000 \
+  capabilities:="[clientPublish,services,connectionGraph,assets]"
+```
+
+3. 在开发电脑打开 Foxglove Studio，连接地址填写 `ws://<robot_ip>:8765`。
+4. 在对应面板订阅下表中的话题（3D 面板把 Fixed Frame 设为 `base_link`，并开启 TF 与 `/robot_description` 显示）：
 
 | 面板类型 | 话题 | 预期画面 |
 | --- | --- | --- |
-| Image | `/camera/camera/color/image_raw` | 640×480、约 30 Hz 的原始彩色画面 |
-| Image | `/camera/camera/aligned_depth_to_color/image_raw` | 640×480、约 30 Hz 的对齐深度图，物体边缘与彩色画面重合 |
-| Image | `/energy_trace/detection_image` | 彩色底图上，检出的能量单元表面覆盖半透明青色掩码，外围画出绿色矩形框并在框上方标注 3 位小数得分，无目标时显示原图 |
+| Image | `/camera/camera/color/image_raw/compressed` | 压缩彩色画面 |
+| Image | `/camera/camera/color/image_raw` | 原始彩色画面（带宽占用较大） |
+| Image | `/camera/camera/aligned_depth_to_color/image_raw` | 对齐深度图，物体边缘与彩色画面重合（带宽占用较大） |
+| Image | `/energy_trace/detection_image/compressed` | 压缩检测叠加图，检出目标覆盖半透明青色掩码和绿色矩形框，框上方标有 3 位小数得分，无目标时显示原图 |
+| Image | `/energy_trace/detection_image` | 原始检测叠加图，带宽占用较大 |
 | 3D | `/energy_trace/pose` | `base_link` 坐标系下的目标位姿坐标轴，跟踪有效或就绪时显示 |
 | 3D | `/energy_trace/marker` | `arm_6dof` 机械臂旁的能量单元 mesh，初始化有效时呈琥珀色半透明，进入 `ready` 后变为绿色并固定位置，复位或失败时消失 |
-
-实测并配置 `camera_translation` 和 `camera_rpy` 之前（当前默认为全 0），三维视图中的能量单元会显示在 `base_link` 原点附近，位置尚未对应实物。
 
 **方式二：用命令行检查话题输出**
 
@@ -165,19 +186,30 @@ ros2 topic list | grep -E 'camera|energy_trace'
 ros2 topic hz /camera/camera/color/image_raw /camera/camera/aligned_depth_to_color/image_raw
 ```
 
-正常出流时，两个图像话题的发布频率约为 30 Hz。`/energy_trace/detection_image`、`/energy_trace/pose` 和 `/energy_trace/marker` 在没有订阅者时不发布数据，打开 Foxglove 面板或用 `ros2 topic hz`、`ros2 topic echo` 订阅后才会产生流量。
-
 ### 5. 测试整车控制与遥控器开关
 
 操作前确认遥控器摇杆居中，测试车处于空旷地面或已架空。
 
 1. 把遥控器拨到双下（`DOWN && DOWN`）完成上电解锁，此时整车保持失能复位。
-2. 按平时测试 `lunar_rover_engineer` 的拨杆组合依次测试底盘、腿部和机械臂，确认整车控制正常。
-3. 拨回双下（`DOWN && DOWN`）并保持摇杆居中，再把左拨杆拨到上，进入左上右下（`UP && DOWN`）触发视觉估计。
+2. 保持摇杆居中，把左拨杆拨到上，进入左上右下（`UP && DOWN`）触发视觉估计。
+
+测试底盘、腿部和机械臂的整车控制时，各拨杆组合对应的模式和摇杆操作见下表：
+
+| 左拨杆 | 右拨杆 | 模式与摇杆操作 |
+| --- | --- | --- |
+| `DOWN` | `DOWN` | 上电解锁，解锁后再次拨到双下（或遥控器断联）整车失能并复位视觉 |
+| `MIDDLE` | `MIDDLE` | 底盘跟随（高速档）+ 腿部四轮模式。左摇杆平移，右摇杆 y 轴控大 yaw |
+| `MIDDLE` | `DOWN` | 底盘跟随（高速档）+ 腿部六轮模式。左摇杆平移，右摇杆 y 轴控大 yaw |
+| `MIDDLE` | `UP` | 底盘小陀螺（高速档）+ 腿部四轮模式。左摇杆平移，右摇杆 y 轴控大 yaw |
+| `UP` | `UP` | 机械臂位置控制（`joint_1`～`joint_3`），底盘失能。左 y 控 `joint_1`，右 x 控 `joint_2`，左 x 控 `joint_3` |
+| `UP` | `MIDDLE` | 机械臂姿态控制（`joint_4`～`joint_6`），底盘失能。右 y 控 `joint_4`，左 x 控 `joint_5`，左 y 控 `joint_6` |
+| `DOWN` | `MIDDLE` | 夹爪控制，底盘失能。右摇杆 `y > 0.8` 打开，`y < -0.8` 闭合 |
+| `DOWN` | `UP` | 键鼠与拨轮模式 |
+| `UP` | `DOWN` | 触发视觉估计，底盘失能 |
 
 **安全提示**：左拨杆从 `DOWN` 拨到 `UP` 会短暂经过 `MIDDLE && DOWN`。底盘和腿部控制器在该档位会使能，切换前必须确认摇杆居中。
 
-触发后，在 `service rmcs attach` 终端可以看到以下日志：
+触发后，在日志终端（`service rmcs attach` 或 `/rosout` 过滤终端）可以看到以下日志：
 
 - 相机已出图时，先打印启动请求和初始化状态，配准和跟踪有效时附带坐标与姿态：
 
@@ -201,20 +233,20 @@ ros2 topic hz /camera/camera/color/image_raw /camera/camera/aligned_depth_to_col
 [INFO] [energy_trace]: status=failed valid=0
 ```
 
-- 相机尚未出图时拨到 `UP && DOWN`，终端打印警告（这也说明遥控器输入已经接到视觉组件）：
+- 相机尚未出图时拨到 `UP && DOWN`，终端打印警告：
 
 ```text
 [WARN] [energy_trace]: Estimator start ignored: waiting for first camera frame
 ```
 
-4. 拨回双下（`DOWN && DOWN`）或关闭遥控器，复位视觉估计器。终端立即打印复位日志并回到空闲状态：
+3. 拨回双下（`DOWN && DOWN`）或关闭遥控器，复位视觉估计器。终端立即打印复位日志并回到空闲状态：
 
 ```text
 [INFO] [energy_trace]: Estimator reset by remote
 [INFO] [energy_trace]: status=idle valid=0
 ```
 
-5. 测试完成后，在远程终端恢复原有车型配置：
+测试完成后，在远程终端恢复原有车型配置：
 
 ```bash
 set-robot lunar_rover_engineer && service rmcs restart
